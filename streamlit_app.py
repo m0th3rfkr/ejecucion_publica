@@ -6,6 +6,9 @@ import logging
 from typing import Optional
 import io
 import os
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.backends import default_backend
 
 # Configure page settings
 st.set_page_config(
@@ -15,57 +18,32 @@ st.set_page_config(
 )
 
 class SnowflakeConnector:
-    def __init__(self, 
-                 okta_login: str,
-                 account: str = "wmg-datalab",
-                 warehouse: str = "RM_ANALYST_SANDBOX_WH_L",
-                 database: str = "DF_PROD_DAP_MISC",
-                 schema: str = "DAP"):
-        self.okta_login = okta_login
-        self.account = account
-        self.warehouse = warehouse
-        self.database = database
-        self.schema = schema
+    def __init__(self):
         self.connection = None
-        
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
 
     def connect(self) -> None:
         try:
-            # Check if we're running in Streamlit Cloud
-            is_streamlit_cloud = os.getenv('STREAMLIT_CLOUD', False)
+            # Get the private key from Streamlit secrets
+            p_key = st.secrets["snowflake_private_key"]
             
-            if is_streamlit_cloud:
-                # Use secrets for authentication in Streamlit Cloud
-                self.connection = sf.connect(
-                    user=self.okta_login,
-                    password=st.secrets["snowflake_password"],  # Add this to your Streamlit secrets
-                    account=self.account,
-                    warehouse=self.warehouse,
-                    database=self.database,
-                    schema=self.schema
-                )
-            else:
-                # Use browser authentication for local development
-                self.connection = sf.connect(
-                    user=self.okta_login,
-                    authenticator="externalbrowser",
-                    account=self.account,
-                    warehouse=self.warehouse,
-                    database=self.database,
-                    schema=self.schema
-                )
+            # Connect to Snowflake using key pair authentication
+            self.connection = sf.connect(
+                user=st.secrets["snowflake_user"],
+                account=st.secrets["snowflake_account"],
+                private_key=p_key,
+                warehouse=st.secrets["snowflake_warehouse"],
+                database=st.secrets["snowflake_database"],
+                schema=st.secrets["snowflake_schema"]
+            )
             
             self.logger.info("Successfully connected to Snowflake")
-            st.success("Connected to Snowflake successfully!")
             
         except Exception as e:
             error_message = str(e)
             self.logger.error(f"Failed to connect to Snowflake: {error_message}")
             st.error(f"Failed to connect to Snowflake: {error_message}")
-            if "browser authentication" in error_message.lower():
-                st.info("If you're running this in Streamlit Cloud, please make sure to configure the Snowflake credentials in the app secrets.")
             raise
 
     def execute_query(self, query: str) -> Optional[pd.DataFrame]:
@@ -100,7 +78,6 @@ def generate_query(isrc_list: list) -> str:
         
     isrc_values = "','".join(clean_isrcs)
     
-    # Rest of your query remains the same
     return f"""
     WITH CTE_BASE AS (
         SELECT
@@ -196,14 +173,12 @@ def main():
                 
                 # Initialize Snowflake connection
                 with st.spinner('Connecting to Snowflake...'):
-                    snowflake_conn = SnowflakeConnector(
-                        okta_login=st.secrets["snowflake_user"]  # Get from Streamlit secrets
-                    )
+                    snowflake_conn = SnowflakeConnector()
 
                 try:
                     # Generate and execute query
                     query = generate_query(isrc_list)
-                    if query is None:  # This handles the case where no valid ISRCs were found
+                    if query is None:
                         return
                         
                     results_df = snowflake_conn.execute_query(query)
