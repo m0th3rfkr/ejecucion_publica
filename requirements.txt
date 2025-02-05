@@ -1,0 +1,5 @@
+streamlit==1.31.0
+pandas==2.1.4
+snowflake-connector-python[pandas]==3.10.0
+xlsxwriter==3.1.9
+openpyxl==3.1.2
