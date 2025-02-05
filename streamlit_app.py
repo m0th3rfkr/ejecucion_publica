@@ -68,7 +68,16 @@ class SnowflakeConnector:
             self.logger.info("Connection closed")
 
 def generate_query(isrc_list: list) -> str:
-    isrc_values = "','".join(isrc_list)
+    # Convert all ISRCs to strings and clean them
+    clean_isrcs = [str(isrc).strip() for isrc in isrc_list if isrc is not None and str(isrc).strip() != '']
+    
+    if not clean_isrcs:
+        st.error("No valid ISRCs found in the input file")
+        return None
+        
+    isrc_values = "','".join(clean_isrcs)
+    
+    # Rest of your query remains the same
     return f"""
     WITH CTE_BASE AS (
         SELECT
