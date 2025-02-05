@@ -162,8 +162,14 @@ def main():
             isrc_column = st.selectbox("Select the ISRC column", df.columns)
 
             if st.button("Process ISRCs", type="primary"):
-                # Get unique ISRCs
-                isrc_list = df[isrc_column].unique().tolist()
+                # Convert ISRC column to string type and clean data
+                df[isrc_column] = df[isrc_column].astype(str).str.strip()
+                
+                # Get unique ISRCs, excluding empty strings
+                isrc_list = df[df[isrc_column] != ''][isrc_column].unique().tolist()
+                
+                # Show number of ISRCs to be processed
+                st.info(f"Processing {len(isrc_list)} unique ISRCs...")
                 
                 # Initialize Snowflake connection
                 with st.spinner('Connecting to Snowflake...'):
@@ -174,6 +180,9 @@ def main():
                 try:
                     # Generate and execute query
                     query = generate_query(isrc_list)
+                    if query is None:  # This handles the case where no valid ISRCs were found
+                        return
+                        
                     results_df = snowflake_conn.execute_query(query)
 
                     if results_df is not None and not results_df.empty:
