@@ -5,10 +5,6 @@ from snowflake.connector.errors import ProgrammingError, DatabaseError
 import logging
 from typing import Optional
 import io
-import os
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.backends import default_backend
 
 # Configure page settings
 st.set_page_config(
@@ -25,20 +21,20 @@ class SnowflakeConnector:
 
     def connect(self) -> None:
         try:
-            # Get the private key from Streamlit secrets
-            p_key = st.secrets["snowflake_private_key"]
-            
-            # Connect to Snowflake using key pair authentication
+            # Connect using OAuth
             self.connection = sf.connect(
                 user=st.secrets["snowflake_user"],
-                account=st.secrets["snowflake_account"],
-                private_key=p_key,
-                warehouse=st.secrets["snowflake_warehouse"],
-                database=st.secrets["snowflake_database"],
-                schema=st.secrets["snowflake_schema"]
+                account='wmg-datalab',
+                warehouse='RM_ANALYST_SANDBOX_WH_L',
+                database='DF_PROD_DAP_MISC',
+                schema='DAP',
+                authenticator='oauth',
+                token=st.secrets.get("snowflake_oauth_token"),
+                role='RM_ANALYST'
             )
             
             self.logger.info("Successfully connected to Snowflake")
+            st.success("Connected to Snowflake successfully!")
             
         except Exception as e:
             error_message = str(e)
