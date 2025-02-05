@@ -5,6 +5,7 @@ from snowflake.connector.errors import ProgrammingError, DatabaseError
 import logging
 from typing import Optional
 import io
+import os
 
 # Configure page settings
 st.set_page_config(
@@ -32,17 +33,39 @@ class SnowflakeConnector:
 
     def connect(self) -> None:
         try:
-            self.connection = sf.connect(
-                user=self.okta_login,
-                authenticator="externalbrowser",
-                account=self.account,
-                warehouse=self.warehouse,
-                database=self.database,
-                schema=self.schema
-            )
+            # Check if we're running in Streamlit Cloud
+            is_streamlit_cloud = os.getenv('STREAMLIT_CLOUD', False)
+            
+            if is_streamlit_cloud:
+                # Use secrets for authentication in Streamlit Cloud
+                self.connection = sf.connect(
+                    user=self.okta_login,
+                    password=st.secrets["snowflake_password"],  # Add this to your Streamlit secrets
+                    account=self.account,
+                    warehouse=self.warehouse,
+                    database=self.database,
+                    schema=self.schema
+                )
+            else:
+                # Use browser authentication for local development
+                self.connection = sf.connect(
+                    user=self.okta_login,
+                    authenticator="externalbrowser",
+                    account=self.account,
+                    warehouse=self.warehouse,
+                    database=self.database,
+                    schema=self.schema
+                )
+            
             self.logger.info("Successfully connected to Snowflake")
+            st.success("Connected to Snowflake successfully!")
+            
         except Exception as e:
-            st.error(f"Failed to connect to Snowflake: {str(e)}")
+            error_message = str(e)
+            self.logger.error(f"Failed to connect to Snowflake: {error_message}")
+            st.error(f"Failed to connect to Snowflake: {error_message}")
+            if "browser authentication" in error_message.lower():
+                st.info("If you're running this in Streamlit Cloud, please make sure to configure the Snowflake credentials in the app secrets.")
             raise
 
     def execute_query(self, query: str) -> Optional[pd.DataFrame]:
