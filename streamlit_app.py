@@ -5,6 +5,8 @@ from snowflake.connector.errors import ProgrammingError, DatabaseError
 import logging
 from typing import Optional
 import io
+import numpy as np
+import json
 
 # Configure page settings
 st.set_page_config(
@@ -12,6 +14,26 @@ st.set_page_config(
     page_icon="🎵",
     layout="wide"
 )
+
+# Función para manejar valores NaN en conversión a JSON
+def handle_nan_for_json(obj):
+    if isinstance(obj, float) and np.isnan(obj):
+        return None
+    elif isinstance(obj, dict):
+        return {k: handle_nan_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [handle_nan_for_json(i) for i in obj]
+    elif isinstance(obj, pd.DataFrame):
+        return handle_nan_for_json(obj.to_dict(orient='records'))
+    elif isinstance(obj, pd.Series):
+        return handle_nan_for_json(obj.to_dict())
+    else:
+        return obj
+
+# Override del método to_json de pandas para manejar NaN correctamente
+def safe_to_json(df, *args, **kwargs):
+    cleaned_data = handle_nan_for_json(df)
+    return json.dumps(cleaned_data, *args, **kwargs)
 
 class SnowflakeConnector:
     def __init__(self):
@@ -50,6 +72,8 @@ class SnowflakeConnector:
             cursor = self.connection.cursor()
             with st.spinner('Executing query...'):
                 result = cursor.execute(query).fetch_pandas_all()
+                # Reemplazar NaN por None para evitar problemas con JSON
+                result = result.replace({np.nan: None})
             st.success('Query executed successfully!')
             return result
         except (ProgrammingError, DatabaseError) as e:
@@ -150,6 +174,9 @@ def main():
             else:
                 df = pd.read_excel(uploaded_file)
 
+            # Reemplazar NaN por None para evitar problemas con JSON
+            df = df.replace({np.nan: None})
+
             # Display preview of uploaded data
             st.write("### Preview of uploaded data")
             st.dataframe(df.head(), use_container_width=True)
@@ -181,6 +208,8 @@ def main():
 
                     if results_df is not None and not results_df.empty:
                         st.write("### Results")
+                        # Asegurarse de que no hay NaN antes de mostrar
+                        results_df = results_df.replace({np.nan: None})
                         st.dataframe(results_df, use_container_width=True)
 
                         # Download button
