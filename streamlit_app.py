@@ -1,199 +1,127 @@
 import streamlit as st
 import pandas as pd
 from io import StringIO
-import snowflake.connector
-from snowflake.connector import DictCursor
-import os
-from dotenv import load_dotenv
-
-# Cargar variables de entorno
-load_dotenv()
+import datetime
+import random
 
 # Configuración de la página
 st.set_page_config(page_title="PUBLIC EXECUTION Checker", page_icon="🎵", layout="wide")
 st.title("🎵 PUBLIC EXECUTION Checker")
 
-# Configuración de conexión a Snowflake
-def init_connection():
-    return snowflake.connector.connect(
-        user=os.getenv('SNOWFLAKE_USER'),
-        password=os.getenv('SNOWFLAKE_PASSWORD'),
-        account=os.getenv('SNOWFLAKE_ACCOUNT'),
-        warehouse=os.getenv('SNOWFLAKE_WAREHOUSE'),
-        database=os.getenv('SNOWFLAKE_DATABASE'),
-        schema=os.getenv('SNOWFLAKE_SCHEMA'),
-        role=os.getenv('SNOWFLAKE_ROLE')
-    )
+# Aviso de modo demo
+st.warning("""
+    **MODO DEMO**: Esta aplicación está funcionando en modo demostración sin conexión a Snowflake.
+    Los datos mostrados son simulados para fines de demostración.
+""")
 
-# Inicializar conexión
-conn = init_connection()
-
-# Ejecutar query y obtener resultados como DataFrame
+# Datos de ejemplo para simular países
 @st.cache_data
-def run_query(query):
-    with conn.cursor(DictCursor) as cur:
-        cur.execute(query)
-        results = cur.fetchall()
-    return pd.DataFrame(results)
+def get_sample_countries():
+    return pd.DataFrame({
+        'COUNTRY_CODE': ['US', 'GB', 'JP', 'BR', 'DE', 'FR', 'MX', 'CA', 'ES', 'IT'],
+        'COUNTRY_NAME': ['United States', 'United Kingdom', 'Japan', 'Brazil', 'Germany', 
+                         'France', 'Mexico', 'Canada', 'Spain', 'Italy']
+    })
 
-# Función para obtener países
-@st.cache_data
-def get_countries():
-    query = """
-    SELECT COUNTRY_CODE, COUNTRY_NAME 
-    FROM DF_PROD_DAP_MISC.DAP.DIM_COUNTRY 
-    WHERE COUNTRY_CODE != 'ZZ' AND COUNTRY_CODE != 'U'
-    ORDER BY COUNTRY_NAME
-    """
-    return run_query(query)
-
-def generate_query(isrc_list, country_code):
-    """Generate SQL query for checking ISRCs with country filter"""
-    clean_isrcs = [str(isrc).strip() for isrc in isrc_list if isrc is not None and str(isrc).strip() != '']
-    if not clean_isrcs:
-        st.error("No valid ISRCs found in the input file")
-        return None
-    isrc_values = "','".join(clean_isrcs)
+# Generar datos de ejemplo para resultados
+def generate_sample_results(isrc_list, country_code):
+    results = []
     
-    return f"""
-    WITH BASE_PRODUCT AS (
-        SELECT DISTINCT
-            p.artist_display_name as ARTIST_DISPLAY_NAME,
-            p.product_title as PRODUCT_TITLE,
-            p.wmi_imprint_desc as WMI_IMPRINT_DESC,
-            owner.marketing_owner_name as MARKETING_OWNER_NAME,
-            rac.text as TEXT,
-            p.product_id as ISRC,
-            ass.P_CREDIT,
-            ass.WW_REPERTOIRE_OWNER
-        FROM DF_PROD_DAP_MISC.DAP.DIM_PRODUCT p
-        LEFT JOIN DF_PROD_DAP_MISC.DAP.FACT_AUDIO_STREAMING_AGG_YEARLY f 
-            ON p.product_key = f.product_key
-        LEFT JOIN DF_PROD_DAP_MISC.DAP.DIM_MARKETING_OWNER owner 
-            ON owner.marketing_owner_key = f.marketing_owner_key
-        LEFT JOIN CORP_GCDMI_PROD.REPORTING.RPT_ASSET_COMPANY_RELATIONSHIP cr 
-            ON cr.id = f.product_key
-        LEFT JOIN CORP_GCDMI_PROD.REPORTING.RPT_ASSET_CREDIT rac 
-            ON rac.asset_id = f.product_key
-        LEFT JOIN CORP_GCDMI_PROD.REPORTING.RPT_ASSET ass 
-            ON ass.ISRC = p.product_id
-        WHERE 
-            p.product_id_type = 'ISRC'
-            AND p.product_id IN ('{isrc_values}')
-            AND p.wmi_imprint_desc = owner.marketing_owner_name
-    ),
-    RIGHTS_INFO AS (
-        SELECT DISTINCT
-            pc.GAID AS ISRC,
-            MIN(t.COUNTRY_LIST_SORTED) as COUNTRY_LIST_SORTED,
-            r.RIGHT_TYPE,
-            r.EFFECTIVE_TO_DATE::TIMESTAMP_NTZ as EFFECTIVE_TO_DATE,
-            r.EFFECTIVE_FROM_DATE::TIMESTAMP_NTZ as EFFECTIVE_FROM_DATE,
-            ROW_NUMBER() OVER (PARTITION BY pc.GAID 
-                             ORDER BY 
-                                CASE r.RIGHT_TYPE 
-                                    WHEN 'Master' THEN 1 
-                                    WHEN 'Distribution' THEN 2 
-                                    ELSE 3 
-                                END,
-                                r.EFFECTIVE_FROM_DATE ASC) as rn
-        FROM CORP_GCDMI_PROD.REPORTING.RPT_PRODUCT_COMPONENT pc 
-        JOIN CORP_GCDMI_PROD.REPORTING.RPT_PRODUCT_COMPONENT_RIGHT r 
-            ON r.PRODUCT_COMPONENT_ID = pc.ID
-        JOIN CORP_GCDMI_PROD.REPORTING.RPT_TERRITORY t 
-            ON t.TERRITORY_ID = r.TERRITORY_ID
-        WHERE 
-            pc.GAID IN ('{isrc_values}')
-            AND (r.EFFECTIVE_TO_DATE > CURRENT_DATE() OR r.EFFECTIVE_TO_DATE IS NULL)
-            AND r.IS_DELETED = 'N'
-            AND t.COUNTRY_LIST_SORTED LIKE '%{country_code}%'
-        GROUP BY 
-            pc.GAID,
-            r.RIGHT_TYPE,
-            r.EFFECTIVE_TO_DATE,
-            r.EFFECTIVE_FROM_DATE
-    )
-    SELECT DISTINCT
-        b.*,
-        r.RIGHT_TYPE,
-        r.EFFECTIVE_TO_DATE,
-        r.EFFECTIVE_FROM_DATE,
-        r.COUNTRY_LIST_SORTED as TRACK_RIGHTS_TERRITORIES
-    FROM BASE_PRODUCT b
-    JOIN RIGHTS_INFO r ON b.ISRC = r.ISRC
-    WHERE r.rn = 1
-    ORDER BY b.ISRC;
-    """
+    owner_names = ["Atlantic Records", "Warner Records", "Elektra Records", "Reprise Records", 
+                  "Parlophone Records", "Asylum Records", "Nonesuch Records"]
+    
+    right_types = ["Master", "Distribution", "Publishing"]
+    
+    for isrc in isrc_list:
+        # Generar datos aleatorios para este ISRC
+        artist = f"Artist {random.randint(1, 100)}"
+        title = f"Track Title {random.randint(1, 500)}"
+        owner = random.choice(owner_names)
+        
+        # Crear entre 1-3 resultados para cada ISRC
+        for _ in range(random.randint(1, 3)):
+            right_type = random.choice(right_types)
+            
+            # Fechas aleatorias
+            from_date = datetime.datetime.now() - datetime.timedelta(days=random.randint(365, 1095))
+            to_date = from_date + datetime.timedelta(days=random.randint(1825, 3650))
+            
+            # Simular territorio
+            territories = f"{country_code},US,GB,EU"
+            
+            results.append({
+                'ARTIST_DISPLAY_NAME': artist,
+                'PRODUCT_TITLE': title,
+                'WMI_IMPRINT_DESC': owner,
+                'MARKETING_OWNER_NAME': owner,
+                'TEXT': f"Main Artist: {artist}",
+                'ISRC': isrc,
+                'P_CREDIT': f"(P) {from_date.year} Warner Music Group",
+                'WW_REPERTOIRE_OWNER': owner,
+                'RIGHT_TYPE': right_type,
+                'EFFECTIVE_FROM_DATE': from_date,
+                'EFFECTIVE_TO_DATE': to_date,
+                'TRACK_RIGHTS_TERRITORIES': territories
+            })
+    
+    # Convertir a DataFrame
+    if results:
+        df = pd.DataFrame(results)
+        return df
+    else:
+        return pd.DataFrame()
 
 def process_file(df, isrc_column, selected_country, selected_country_code):
-    """Process the uploaded file with ISRCs"""
+    """Process the uploaded file with ISRCs (demo mode)"""
     df[isrc_column] = df[isrc_column].astype(str).str.strip()
     isrc_list = df[df[isrc_column] != ''][isrc_column].unique().tolist()
-    st.info(f"Processing {len(isrc_list)} unique ISRCs...")
-
-    query = generate_query(isrc_list, selected_country_code)
-    if query is None:
+    
+    if not isrc_list:
+        st.error("No valid ISRCs found in the input file")
         return
         
-    with st.spinner('Executing query...'):
-        try:
-            # Ejecutar query y obtener resultados
-            results_df = run_query(query)
+    st.info(f"Processing {len(isrc_list)} unique ISRCs...")
+    
+    with st.spinner('Analyzing data...'):
+        # Simular un tiempo de procesamiento
+        import time
+        time.sleep(2)
+        
+        # Generar resultados de ejemplo
+        results_df = generate_sample_results(isrc_list, selected_country_code)
+        
+        if not results_df.empty:
+            st.write("### Results")
+            st.dataframe(results_df)
             
-            # Convert timestamp columns and handle out-of-bounds dates
-            timestamp_columns = ['EFFECTIVE_TO_DATE', 'EFFECTIVE_FROM_DATE']
-            for col in timestamp_columns:
-                if col in results_df.columns:
-                    # Convert timestamps while handling out-of-bounds dates
-                    results_df[col] = pd.to_datetime(results_df[col].apply(
-                        lambda x: None if x is None or pd.Timestamp(x).year > 2262 else x
-                    ))
+            # Add download button
+            st.download_button(
+                label="📥 Download Results",
+                data=results_df.to_csv(index=False).encode('utf-8'),
+                file_name=f"demo_isrc_results_{selected_country_code}.csv",
+                mime="text/csv"
+            )
+            
+            # Display summary statistics
+            st.write("### Summary")
+            summary_df = results_df.groupby(['RIGHT_TYPE']).size().reset_index(name='count')
+            st.dataframe(summary_df)
+            
+            # Mostrar aviso de modo demo
+            st.info("⚠️ Recuerda que estos son datos SIMULADOS para propósitos de demostración")
+        else:
+            st.warning(f"No results found for the provided ISRCs in {selected_country}")
 
-            if not results_df.empty:
-                st.write("### Results")
-                # Convert to more efficient data types
-                for col in results_df.select_dtypes(['object']).columns:
-                    try:
-                        results_df[col] = results_df[col].astype('string')
-                    except:
-                        pass  # Si falla, mantener el tipo original
-                
-                st.dataframe(results_df)
-                
-                # Add download button
-                st.download_button(
-                    label="📥 Download Results",
-                    data=results_df.to_csv(index=False).encode('utf-8'),
-                    file_name=f"isrc_results_{selected_country_code}.csv",
-                    mime="text/csv"
-                )
-                
-                # Display summary statistics
-                st.write("### Summary")
-                summary_df = results_df.groupby(['RIGHT_TYPE']).size().reset_index(name='count')
-                st.dataframe(summary_df)
-                
-            else:
-                st.warning(f"No results found for the provided ISRCs in {selected_country}")
-        except Exception as e:
-            st.error(f"An error occurred: {str(e)}")
-            st.info("Please check the query execution and data types.")
+# Obtener países de ejemplo
+countries_df = get_sample_countries()
+selected_country = st.selectbox(
+    "Select a country to filter territories",
+    options=countries_df['COUNTRY_NAME'].tolist(),
+    format_func=lambda x: x
+)
 
-# Get countries and create selector
-try:
-    countries_df = get_countries()
-    selected_country = st.selectbox(
-        "Select a country to filter territories",
-        options=countries_df['COUNTRY_NAME'].tolist(),
-        format_func=lambda x: x
-    )
-
-    # Get selected country code
-    selected_country_code = countries_df[countries_df['COUNTRY_NAME'] == selected_country]['COUNTRY_CODE'].iloc[0]
-except Exception as e:
-    st.error(f"Error al conectar con Snowflake: {str(e)}")
-    st.info("Por favor verifica tus credenciales de Snowflake")
-    st.stop()
+# Get selected country code
+selected_country_code = countries_df[countries_df['COUNTRY_NAME'] == selected_country]['COUNTRY_CODE'].iloc[0]
 
 st.markdown("Upload ISRCs to check their status in the WMG database.")
 
@@ -303,6 +231,40 @@ with tab3:
             st.error(f"Error processing Excel file: {str(e)}")
             st.info("Please make sure your Excel file is properly formatted")
 
-# Cerrar conexión al final
-if 'conn' in locals():
-    conn.close()
+# Nota sobre conectividad
+st.markdown("---")
+expander = st.expander("🔧 Información para conectar con Snowflake")
+with expander:
+    st.markdown("""
+    ### Posibles soluciones al error de conexión con Snowflake:
+    
+    1. **Verificar el formato de la cuenta de Snowflake**:
+       - Prueba con `ENT_OKTA_SNOWFLAKE_DATALAB.us-east-1` o la región correcta
+       - Consulta con el equipo de IT el formato exacto para conexiones externas
+    
+    2. **Políticas de seguridad**:
+       - Snowflake puede estar bloqueando conexiones desde Streamlit Cloud
+       - Consulta si necesitas configurar IP fijas o autenticación adicional
+    
+    3. **Alternativas de despliegue**:
+       - Considera desplegar en un servidor interno con acceso a Snowflake
+       - Explora Snowflake Streamlit Integration si está disponible
+    
+    4. **Configuración en secretos**:
+       El formato correcto de los secretos debería ser:
+       ```
+       SNOWFLAKE_USER = "tu_usuario"
+       SNOWFLAKE_PASSWORD = "tu_contraseña"
+       SNOWFLAKE_ACCOUNT = "tu_cuenta" 
+       SNOWFLAKE_WAREHOUSE = "TECH_SANDBOX_WH_M"
+       SNOWFLAKE_DATABASE = "TECH_SANDBOX"
+       SNOWFLAKE_SCHEMA = "ANTONIO_M"
+       SNOWFLAKE_ROLE = "ENT_OKTA_SNOWFLAKE_DATALAB_TECH"
+       ```
+    """)
+
+# Información de contacto
+st.markdown("---")
+st.markdown("""
+**Para soporte técnico**: Contacta al equipo de IT o al administrador de Snowflake
+""")
